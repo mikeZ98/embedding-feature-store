@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from embedding_feature_store.core.errors import (
+    ConflictError,
     DrainTimeoutError,
     FeatureStoreError,
     IllegalTransitionError,
@@ -28,7 +29,8 @@ from embedding_feature_store.schemas import MigrationPhase
         (401, ValidationFailedError, False),
         (404, NotFoundError, False),
         (408, StoreTimeoutError, True),
-        (409, ValidationFailedError, False),
+        (409, ConflictError, False),
+        (425, TransientError, True),
         (422, ValidationFailedError, False),
         (429, RateLimitedError, True),
         (500, ServerError, True),

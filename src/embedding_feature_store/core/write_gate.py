@@ -20,13 +20,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from embedding_feature_store.core.errors import DrainTimeoutError, GateClosedError, GateStateError
-from embedding_feature_store.core.ports import QueueObserver
+from embedding_feature_store.core.ports import InFlightObserver
 
 __all__ = ["WriteGate"]
 
 
 class WriteGate:
-    def __init__(self, *, observer: QueueObserver | None = None) -> None:
+    def __init__(self, *, observer: InFlightObserver | None = None) -> None:
         self._open = asyncio.Event()
         self._open.set()
         self._idle = asyncio.Event()

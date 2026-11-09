@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -155,7 +155,7 @@ class FakeSource:
 
     async def stream_rows(
         self, *, snapshot_lsn: int, after_id: int | None, batch_size: int
-    ) -> AsyncIterator[Sequence[SourceRecord]]:
+    ) -> AsyncGenerator[Sequence[SourceRecord]]:
         eligible = [
             r
             for r in sorted(self.rows, key=lambda r: r.record_id)

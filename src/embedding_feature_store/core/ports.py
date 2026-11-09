@@ -7,7 +7,7 @@ made on the transient/permanent classification alone.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from typing import Protocol
 
 from embedding_feature_store.schemas import (
@@ -20,7 +20,15 @@ from embedding_feature_store.schemas import (
     VectorSpec,
 )
 
-__all__ = ["Clock", "EmbeddingAdapter", "QueueObserver", "Sleep", "SourceReader", "VectorStore"]
+__all__ = [
+    "Clock",
+    "EmbeddingAdapter",
+    "InFlightObserver",
+    "QueueObserver",
+    "Sleep",
+    "SourceReader",
+    "VectorStore",
+]
 
 type Clock = Callable[[], float]
 """Monotonic seconds. Never wall-clock time."""
@@ -28,8 +36,11 @@ type Clock = Callable[[], float]
 type Sleep = Callable[[float], Awaitable[None]]
 """Suspend for the given number of seconds (``asyncio.sleep`` in production)."""
 
-type QueueObserver = Callable[[int], None]
-"""Receives the current queue / in-flight depth whenever it changes."""
+type QueueObserver = Callable[[int, int, bool], None]
+"""Bounded-queue telemetry: ``(depth, capacity, producer_blocked)`` on every change."""
+
+type InFlightObserver = Callable[[int], None]
+"""Receives the number of in-flight operations whenever it changes."""
 
 
 class VectorStore(Protocol):
@@ -81,8 +92,12 @@ class SourceReader(Protocol):
 
     def stream_rows(
         self, *, snapshot_lsn: int, after_id: int | None, batch_size: int
-    ) -> AsyncIterator[Sequence[SourceRecord]]:
-        """Rows as of ``snapshot_lsn`` with id > ``after_id``, in ascending id batches."""
+    ) -> AsyncGenerator[Sequence[SourceRecord]]:
+        """Rows as of ``snapshot_lsn`` with id > ``after_id``, in ascending id batches.
+
+        Consumers that may stop early must close the generator (e.g. with
+        ``contextlib.aclosing``) so the underlying cursor is released promptly.
+        """
         ...
 
     async def changes_since(self, lsn: int, *, limit: int) -> Sequence[CdcEvent]:

@@ -4,9 +4,9 @@ Every error raised by the core derives from :class:`FeatureStoreError` and is
 classified as exactly one of:
 
 * :class:`TransientError` — the same operation may succeed if replayed
-  (timeouts, HTTP 408/429/5xx, connection resets, a gate that is draining).
+  (timeouts, HTTP 408/425/429/5xx, connection resets, a gate that is draining).
   Only these are retried by :class:`~embedding_feature_store.core.retry.Retrier`.
-* :class:`PermanentError` — replaying cannot help (validation, 404, schema or
+* :class:`PermanentError` — replaying cannot help (validation, 404, 409, schema or
   dimension mismatches, illegal state transitions, failed verification).
 """
 
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from embedding_feature_store.schemas import MigrationPhase, VerificationReport
 
 __all__ = [
+    "ConflictError",
     "CutoverError",
     "DrainTimeoutError",
     "FeatureStoreError",
@@ -25,6 +26,7 @@ __all__ = [
     "GateStateError",
     "IllegalTransitionError",
     "InvalidVectorError",
+    "MalformedResponseError",
     "NotFoundError",
     "PermanentError",
     "RateLimitedError",
@@ -106,6 +108,14 @@ class NotFoundError(PermanentError):
     """The addressed resource does not exist (HTTP 404)."""
 
 
+class ConflictError(PermanentError):
+    """The request conflicts with current remote state (HTTP 409), e.g. already exists."""
+
+
+class MalformedResponseError(PermanentError):
+    """The remote answered successfully but the body violates the expected wire contract."""
+
+
 class SchemaMismatchError(PermanentError):
     """Shapes disagree: vector dimension, distance metric or batch arity."""
 
@@ -154,16 +164,24 @@ class RetryExhaustedError(PermanentError):
 # ---------------------------------------------------------------------------
 
 _HTTP_TOO_MANY_REQUESTS = 429
-_HTTP_REQUEST_TIMEOUT = 408
-_HTTP_NOT_FOUND = 404
 _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_CLIENT_ERROR_MIN = 400
+_BY_STATUS: dict[int, type[FeatureStoreError]] = {
+    404: NotFoundError,
+    408: StoreTimeoutError,
+    409: ConflictError,
+    425: TransientError,  # Too Early: safe to replay once the server is ready
+}
 
 
 def error_for_status(
     status_code: int, message: str, *, retry_after: float | None = None
 ) -> FeatureStoreError:
-    """Map an HTTP error status to the taxonomy. ``status_code`` must be >= 400."""
+    """Map an HTTP error status to the taxonomy. ``status_code`` must be >= 400.
+
+    408/425/429/5xx are transient; 404 and 409 have dedicated permanent types;
+    any other 4xx is a :class:`ValidationFailedError`.
+    """
     if status_code < _HTTP_CLIENT_ERROR_MIN:
         msg = f"status {status_code} is not an error"
         raise ValueError(msg)
@@ -171,8 +189,4 @@ def error_for_status(
         return ServerError(message, status_code=status_code)
     if status_code == _HTTP_TOO_MANY_REQUESTS:
         return RateLimitedError(message, retry_after=retry_after)
-    if status_code == _HTTP_REQUEST_TIMEOUT:
-        return StoreTimeoutError(message)
-    if status_code == _HTTP_NOT_FOUND:
-        return NotFoundError(message)
-    return ValidationFailedError(message)
+    return _BY_STATUS.get(status_code, ValidationFailedError)(message)
