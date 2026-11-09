@@ -4,6 +4,9 @@
 #   - every tool cache is routed under ./.cache/
 #   - no stray cache directories at the project root
 #   - .gitignore covers .cache/, .venv/, .env
+
+# Re-exec under real bash when launched via `sh` (POSIX mode lacks process substitution).
+if [ -z "${BASH_VERSION:-}" ] || shopt -qo posix 2>/dev/null; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

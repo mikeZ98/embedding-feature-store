@@ -4,6 +4,9 @@
 # Usage:
 #   scripts/audit_identity.sh                  # audit git config + full history
 #   scripts/audit_identity.sh --msg-file FILE  # additionally audit a pending message
+
+# Re-exec under real bash when launched via `sh` (POSIX mode lacks process substitution).
+if [ -z "${BASH_VERSION:-}" ] || shopt -qo posix 2>/dev/null; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 readonly EXPECTED_NAME="mikeZ98"
