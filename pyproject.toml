@@ -55,7 +55,7 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "PLR2004", "ANN"]
+"tests/**" = ["S101", "PLR2004", "ANN", "ARG002"]
 
 [tool.ruff.format]
 quote-style = "double"
