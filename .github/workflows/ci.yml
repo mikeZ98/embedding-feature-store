@@ -1,0 +1,199 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Matches the uv pinned in the Dockerfile and used locally.
+  UV_VERSION: "0.11.7"
+  # Use the interpreter from setup-python; never download another one.
+  UV_PYTHON_DOWNLOADS: never
+  # Hypothesis: derandomised, 500 examples, no example database.
+  HYPOTHESIS_PROFILE: ci
+  FORCE_COLOR: "1"
+
+jobs:
+  audit-identity:
+    name: audit-identity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Full history of the commit under test. For pull requests that is the
+      # PR head, not GitHub's synthetic merge commit (committed by GitHub).
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Sole identity, zero trailers, across the full commit range
+        run: sh scripts/audit_identity.sh --history-only --rev HEAD
+
+  audit-hygiene:
+    name: audit-hygiene
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: No absolute host paths, caches under ./.cache/, images digest-pinned
+        run: sh scripts/audit_hygiene.sh --workspace
+
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-local-path: .cache/uv
+          cache-dependency-glob: uv.lock
+      - name: ruff check
+        run: uv run --frozen ruff check .
+      - name: ruff format --check
+        run: uv run --frozen ruff format --check .
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-local-path: .cache/uv
+          cache-dependency-glob: uv.lock
+      - name: mypy --strict
+        run: uv run --frozen mypy --strict
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-local-path: .cache/uv
+          cache-dependency-glob: uv.lock
+      - name: pytest (network sockets disabled, 100% line+branch gate)
+        run: >-
+          uv run --frozen pytest
+          --disable-socket --allow-unix-socket
+          --cov-fail-under=100
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-report=html
+      - name: Coverage is exactly 100.00% (no rounding)
+        run: |
+          uv run --frozen coverage json --quiet -o .cache/coverage/coverage.json
+          python - <<'PY'
+          import json
+
+          totals = json.load(open(".cache/coverage/coverage.json"))["totals"]
+          print(
+              f"lines {totals['covered_lines']}/{totals['num_statements']}, "
+              f"branches {totals['covered_branches']}/{totals['num_branches']}, "
+              f"{totals['percent_covered_display']}%"
+          )
+          assert totals["num_statements"] > 0 and totals["num_branches"] > 0
+          assert totals["missing_lines"] == 0, "uncovered lines"
+          assert totals["missing_branches"] == 0, "uncovered branches"
+          PY
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: coverage-report
+          # The reports live under ./.cache/, which counts as hidden.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            .cache/coverage/coverage.xml
+            .cache/coverage/coverage.json
+            .cache/coverage/html/
+
+  docker-build:
+    name: docker-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # docker-container driver: required for OCI export with rewrite-timestamp.
+      - uses: docker/setup-buildx-action@v4.4.1
+      - name: SOURCE_DATE_EPOCH = commit time of HEAD
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - name: Build image
+        run: >-
+          docker buildx build
+          --load
+          --provenance=false
+          --sbom=false
+          --build-arg SOURCE_DATE_EPOCH
+          --tag efs-migrate:ci
+          .
+      - name: Image runs as non-root 10001:10001
+        run: |
+          configured="$(docker image inspect --format '{{.Config.User}}' efs-migrate:ci)"
+          effective="$(docker run --rm --entrypoint id efs-migrate:ci -u):$(docker run --rm --entrypoint id efs-migrate:ci -g)"
+          echo "configured=${configured} effective=${effective}"
+          test "${configured}" = "10001:10001"
+          test "${effective}" = "10001:10001"
+      - name: Smoke run on a read-only root with no network
+        run: |
+          mkdir -p .cache
+          docker run --rm \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --security-opt no-new-privileges:true --cap-drop ALL --network none \
+            efs-migrate:ci --rows 200 --no-hud --no-live-traffic --log-level WARNING \
+            | tee .cache/smoke.json
+          python3 -c 'import json; s = json.load(open(".cache/smoke.json")); assert s["status"] == "completed" and s["verification"]["passed"], s'
+      - name: Two cold builds are bit-for-bit identical
+        run: sh scripts/verify_reproducible_image.sh
+      - name: Upload build logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: docker-build-logs
+          include-hidden-files: true
+          if-no-files-found: ignore
+          path: .cache/docker/*.log
