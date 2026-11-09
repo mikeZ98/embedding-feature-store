@@ -1,0 +1,71 @@
+# Local stack: a real Qdrant and one efs-migrate smoke run against it.
+#
+#   SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+#     docker compose up --build --abort-on-container-exit --exit-code-from migrator
+#   docker compose down
+#
+# Nothing is bind-mounted from the host: Qdrant keeps its data in tmpfs, so
+# every `up` starts from an empty store and `down` leaves nothing behind.
+#
+# Compose cannot pass BuildKit's rewrite-timestamp exporter option, so the image
+# it builds is functionally identical but not byte-identical across builds; the
+# bit-for-bit artefact comes from scripts/verify_reproducible_image.sh.
+
+name: embedding-feature-store
+
+x-hardened: &hardened
+  read_only: true
+  security_opt:
+    - "no-new-privileges:true"
+  cap_drop:
+    - ALL
+
+services:
+  qdrant:
+    <<: *hardened
+    image: qdrant/qdrant:v1.13.6-unprivileged@sha256:d0de18974353178cb0a9bbfe4129e4268122d949a3bd89925fffb9bcfc5b8c1e
+    # The unprivileged image's own non-root user, stated explicitly.
+    user: "1000:1000"
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+      # Default is ./.qdrant-initialized under the read-only /qdrant.
+      QDRANT_INIT_FILE_PATH: /qdrant/storage/.qdrant-initialized
+    ports:
+      - "127.0.0.1:6333:6333"
+    tmpfs:
+      - /qdrant/storage:uid=1000,gid=1000,mode=0700,size=512m
+      - /qdrant/snapshots:uid=1000,gid=1000,mode=0700,size=64m
+      - /tmp:uid=1000,gid=1000,mode=0700,size=64m
+    healthcheck:
+      # No curl/wget in the image; bash's /dev/tcp is enough for GET /readyz.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/6333
+          && printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          && head -n 1 <&3 | grep -q ' 200 '
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  migrator:
+    <<: *hardened
+    build:
+      context: .
+      args:
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-0}
+    image: embedding-feature-store/efs-migrate:local
+    user: "10001:10001"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    command:
+      - --qdrant-url
+      - http://qdrant:6333
+      - --no-hud
+    tmpfs:
+      - /tmp:uid=10001,gid=10001,mode=0700,size=16m
+    restart: "no"

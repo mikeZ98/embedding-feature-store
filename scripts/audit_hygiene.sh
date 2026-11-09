@@ -4,6 +4,7 @@
 #   - every tool cache is routed under ./.cache/
 #   - no stray cache directories at the project root
 #   - .gitignore covers .cache/, .venv/, .env
+#   - every container image pulled by Dockerfile / compose.yaml is pinned by digest
 #
 # Usage: sh scripts/audit_hygiene.sh [--workspace]
 #   --workspace  also require a pristine working tree: no modified, staged or
@@ -83,7 +84,29 @@ for path in .cache/probe .venv/probe .env; do
   git check-ignore -q --no-index "$path" && ok "ignored: $path" || err "not ignored: $path"
 done
 
-# --- 5. Pristine working tree (--workspace) -----------------------------------
+# --- 5. Container images pinned by immutable digest ---------------------------
+# Dockerfile: the syntax frontend, image ARGs and literal FROMs (FROM ${ARG} is
+# covered by its ARG). compose.yaml: every pulled image; the locally built
+# embedding-feature-store/* image has no registry digest.
+readonly DIGEST_RE='@sha256:[0-9a-f]{64}'
+if [[ -f Dockerfile ]]; then
+  if unpinned="$(grep -nE '^# syntax=|^ARG [A-Z_]+_IMAGE=|^FROM ' Dockerfile \
+      | grep -vE '^[0-9]+:FROM \$\{[A-Z_]+\}' | grep -vE "$DIGEST_RE")"; then
+    err "Dockerfile image references without a digest:"$'\n'"$unpinned"
+  else
+    ok "Dockerfile images pinned by digest"
+  fi
+fi
+if [[ -f compose.yaml ]]; then
+  if unpinned="$(grep -nE '^[[:space:]]+image:' compose.yaml \
+      | grep -v 'image: embedding-feature-store/' | grep -vE "$DIGEST_RE")"; then
+    err "compose.yaml images without a digest:"$'\n'"$unpinned"
+  else
+    ok "compose.yaml images pinned by digest"
+  fi
+fi
+
+# --- 6. Pristine working tree (--workspace) -----------------------------------
 if ((workspace)); then
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]]; then
     ok "working tree is pristine"

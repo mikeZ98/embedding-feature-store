@@ -1,0 +1,11 @@
+# Allow-list build context: only what the wheel is built from.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+
+# ...minus anything a local run may have left inside src/.
+**/__pycache__
+**/*.py[cod]
+**/.DS_Store
