@@ -93,6 +93,8 @@ addopts = [
 ]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
+# A test still running after 120 s dumps every thread's stack (no kill).
+faulthandler_timeout = 120
 filterwarnings = ["error"]
 xfail_strict = true
 
