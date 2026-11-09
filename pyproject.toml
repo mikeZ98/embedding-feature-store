@@ -1,0 +1,123 @@
+[project]
+name = "embedding-feature-store"
+version = "0.1.0"
+description = "Versioned embedding feature store with deterministic migration pipelines."
+readme = "README.md"
+authors = [
+    { name = "mikeZ98", email = "145975972+mikeZ98@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28,<1",
+    "pydantic>=2.10,<3",
+    "rich>=13.9",
+]
+
+[project.scripts]
+efs-migrate = "embedding_feature_store.pipeline.cli:main"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.120",
+    "mutmut>=3.2",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "pytest-socket>=0.7",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+# --------------------------------------------------------------------------
+# uv — cache routed under ./.cache/
+# --------------------------------------------------------------------------
+[tool.uv]
+cache-dir = ".cache/uv"
+default-groups = ["dev"]
+
+# --------------------------------------------------------------------------
+# ruff
+# --------------------------------------------------------------------------
+[tool.ruff]
+cache-dir = ".cache/ruff"
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF",
+    "S", "BLE", "PT", "RET", "ARG", "PTH", "PL", "TRY", "PERF", "ANN",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "ANN"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# --------------------------------------------------------------------------
+# mypy
+# --------------------------------------------------------------------------
+[tool.mypy]
+cache_dir = ".cache/mypy"
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+# --------------------------------------------------------------------------
+# pytest
+# --------------------------------------------------------------------------
+[tool.pytest.ini_options]
+cache_dir = ".cache/pytest"
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--disable-socket",
+    "--allow-unix-socket",
+    "--cov=embedding_feature_store",
+    "--cov-branch",
+    "--cov-fail-under=100",
+]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error"]
+xfail_strict = true
+
+# --------------------------------------------------------------------------
+# coverage — data and reports routed under ./.cache/
+# --------------------------------------------------------------------------
+[tool.coverage.run]
+data_file = ".cache/coverage/.coverage"
+branch = true
+source = ["embedding_feature_store"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
+
+[tool.coverage.html]
+directory = ".cache/coverage/html"
+
+[tool.coverage.xml]
+output = ".cache/coverage/coverage.xml"
+
+# --------------------------------------------------------------------------
+# mutmut (3.x writes its workspace to ./mutants/; it is git-ignored)
+# --------------------------------------------------------------------------
+[tool.mutmut]
+paths_to_mutate = ["src/embedding_feature_store/"]
+tests_dir = ["tests/"]

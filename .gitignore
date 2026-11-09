@@ -1,0 +1,35 @@
+# Tool caches (all routed under ./.cache/)
+/.cache/
+
+# Virtual environment
+/.venv/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Stray tool artefacts (should never appear; routed to ./.cache/)
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# mutmut 3.x workspace (location is hard-coded by mutmut)
+/mutants/
+
+# Python build / bytecode
+__pycache__/
+*.py[cod]
+/build/
+/dist/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
