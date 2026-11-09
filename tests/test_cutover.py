@@ -11,6 +11,7 @@ from embedding_feature_store.core.cutover import AliasCutoverCoordinator, Cutove
 from embedding_feature_store.core.errors import (
     CutoverError,
     DrainTimeoutError,
+    GateStateError,
     ServerError,
     StoreConnectionError,
     StoreTimeoutError,
@@ -251,6 +252,25 @@ class TestFailureSafety:
         store.alias_faults = [AliasFault("raise_before", KeyError("bug"))]
         with pytest.raises(KeyError):
             await coordinator.cutover("live", "new")
+        assert gate.is_open
+
+
+class TestFrozenByCaller:
+    @pytest.mark.asyncio
+    async def test_swaps_inside_callers_freeze_without_touching_gate(self) -> None:
+        coordinator, store, gate = make({"live": "old"})
+        await gate.close_and_drain(timeout_s=1)
+        outcome = await coordinator.cutover("live", "new", frozen_by_caller=True)
+        assert outcome.current == "new"
+        assert store.alias_calls[0].gate_open is False
+        assert not gate.is_open, "the caller owns the freeze and reopens it"
+
+    @pytest.mark.asyncio
+    async def test_refuses_when_gate_is_open(self) -> None:
+        coordinator, store, gate = make({"live": "old"})
+        with pytest.raises(GateStateError, match="write gate is open"):
+            await coordinator.cutover("live", "new", frozen_by_caller=True)
+        assert store.alias_calls == []
         assert gate.is_open
 
 

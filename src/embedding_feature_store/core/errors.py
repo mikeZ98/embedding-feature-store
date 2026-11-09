@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from embedding_feature_store.schemas import MigrationPhase, VerificationReport
 
 __all__ = [
+    "AbortRequestedError",
     "ConflictError",
     "CutoverError",
     "DrainTimeoutError",
@@ -148,6 +149,15 @@ class VerificationError(PermanentError):
 
 class CutoverError(PermanentError):
     """The alias swap failed; the alias binding is reported in the message."""
+
+
+class AbortRequestedError(PermanentError):
+    """A cooperative shutdown was requested (e.g. SIGTERM) and honoured at a checkpoint."""
+
+    def __init__(self, signum: int, checkpoint: str) -> None:
+        super().__init__(f"abort requested by signal {signum} at {checkpoint}")
+        self.signum = signum
+        self.checkpoint = checkpoint
 
 
 class RetryExhaustedError(PermanentError):

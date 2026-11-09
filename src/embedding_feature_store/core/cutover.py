@@ -18,10 +18,11 @@ without a collection.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from dataclasses import dataclass
 
-from embedding_feature_store.core.errors import CutoverError, FeatureStoreError
+from embedding_feature_store.core.errors import CutoverError, FeatureStoreError, GateStateError
 from embedding_feature_store.core.ports import Clock, VectorStore
 from embedding_feature_store.core.retry import Retrier
 from embedding_feature_store.core.write_gate import WriteGate
@@ -67,24 +68,42 @@ class AliasCutoverCoordinator:
         aliases = await self._retrier.run(self._store.list_aliases)
         return aliases.get(alias)
 
-    async def cutover(self, alias: str, target: str) -> CutoverOutcome:
-        """Atomically point ``alias`` at ``target``."""
+    async def cutover(
+        self, alias: str, target: str, *, frozen_by_caller: bool = False
+    ) -> CutoverOutcome:
+        """Atomically point ``alias`` at ``target``.
+
+        With ``frozen_by_caller=True`` the caller already holds the write gate
+        closed and drained (e.g. a freeze spanning final reconcile, verification
+        and swap); the coordinator then neither closes nor reopens it, and
+        refuses to run if the gate is in fact open.
+        """
+        if frozen_by_caller and self._gate.is_open:
+            msg = "frozen_by_caller=True but the write gate is open"
+            raise GateStateError(msg)
         if not await self._retrier.run(lambda: self._store.collection_exists(target)):
             msg = f"cannot cut {alias!r} over to missing collection {target!r}"
             raise CutoverError(msg)
-        return await self._rebind(alias, target)
+        return await self._rebind(alias, target, frozen_by_caller=frozen_by_caller)
 
     async def rollback(self, outcome: CutoverOutcome) -> CutoverOutcome:
         """Restore the binding that ``outcome`` replaced (removing the alias if none)."""
         return await self._rebind(outcome.alias, outcome.previous)
 
-    async def _rebind(self, alias: str, target: str | None) -> CutoverOutcome:
+    async def _rebind(
+        self, alias: str, target: str | None, *, frozen_by_caller: bool = False
+    ) -> CutoverOutcome:
         previous = await self._binding(alias)
         if previous == target:
             return CutoverOutcome(alias=alias, previous=previous, current=target, freeze_s=0.0)
 
         started = self._clock()
-        async with self._gate.frozen(self._drain_timeout_s):
+        window = (
+            contextlib.nullcontext()
+            if frozen_by_caller
+            else self._gate.frozen(self._drain_timeout_s)
+        )
+        async with window:
             swap_error: FeatureStoreError | None = None
             try:
                 await self._store.update_aliases(_rebind_actions(alias, previous, target))

@@ -12,11 +12,13 @@ write per point id wins) without re-reading the source.
 
 from __future__ import annotations
 
+import functools
 import hashlib
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 
 from embedding_feature_store.core.errors import SchemaMismatchError, VerificationError
 from embedding_feature_store.core.ports import VectorStore
+from embedding_feature_store.core.retry import Retrier
 from embedding_feature_store.schemas import PointRecord, VectorSpec, VerificationReport
 
 __all__ = ["ExpectationLedger", "MigrationVerifier", "MultisetDigest"]
@@ -115,19 +117,33 @@ class ExpectationLedger:
 
 
 class MigrationVerifier:
-    def __init__(self, store: VectorStore, *, page_size: int = 256) -> None:
+    """Reads are idempotent; pass ``retrier`` to replay them on transient faults."""
+
+    def __init__(
+        self, store: VectorStore, *, page_size: int = 256, retrier: Retrier | None = None
+    ) -> None:
         if page_size < 1:
             msg = "page_size must be >= 1"
             raise ValueError(msg)
         self._store = store
         self._page_size = page_size
+        self._retrier = retrier
+
+    async def _read[T](self, operation: Callable[[], Awaitable[T]]) -> T:
+        if self._retrier is None:
+            return await operation()
+        return await self._retrier.run(operation)
 
     async def scan(self, collection: str, spec: VectorSpec) -> MultisetDigest:
         """Digest every point in ``collection``, enforcing ``spec.dimension``."""
         digest = MultisetDigest()
         offset: int | None = None
         while True:
-            page = await self._store.scroll(collection, offset=offset, limit=self._page_size)
+            page = await self._read(
+                functools.partial(
+                    self._store.scroll, collection, offset=offset, limit=self._page_size
+                )
+            )
             for point in page.points:
                 if len(point.vector) != spec.dimension:
                     msg = (
@@ -147,7 +163,7 @@ class MigrationVerifier:
         self, collection: str, spec: VectorSpec, ledger: ExpectationLedger
     ) -> VerificationReport:
         """Compare ``collection`` against ``ledger``. Never raises on a mismatch."""
-        target_count = await self._store.count(collection)
+        target_count = await self._read(functools.partial(self._store.count, collection))
         target = await self.scan(collection, spec)
         source_checksum = ledger.digest.hexdigest()
         target_checksum = target.hexdigest()
