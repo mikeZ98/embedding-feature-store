@@ -271,12 +271,16 @@ def test_module_entry_point(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "argv", ["efs-migrate", *SMALL, "--no-hud", "--no-live-traffic"])
+    # runpy warns (an error here) if the module is already imported; make the
+    # test independent of execution order.
+    monkeypatch.delitem(sys.modules, "embedding_feature_store.__main__", raising=False)
     with pytest.raises(SystemExit) as exc:
         runpy.run_module("embedding_feature_store", run_name="__main__")
     assert exc.value.code == 0
     assert json.loads(capsys.readouterr().out)["status"] == "completed"
 
 
-def test_module_import_has_no_side_effects() -> None:
+def test_module_import_has_no_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, "embedding_feature_store.__main__", raising=False)
     module = importlib.import_module("embedding_feature_store.__main__")
     assert module.main is cli.main

@@ -4,10 +4,23 @@
 #   - every tool cache is routed under ./.cache/
 #   - no stray cache directories at the project root
 #   - .gitignore covers .cache/, .venv/, .env
+#
+# Usage: sh scripts/audit_hygiene.sh [--workspace]
+#   --workspace  also require a pristine working tree: no modified, staged or
+#                untracked (non-ignored) files. Run it after tooling such as
+#                scripts/mutate.sh to prove nothing outside ./.cache/ was touched.
 
 # Re-exec under real bash when launched via `sh` (POSIX mode lacks process substitution).
 if [ -z "${BASH_VERSION:-}" ] || shopt -qo posix 2>/dev/null; then exec bash "$0" "$@"; fi
 set -euo pipefail
+
+workspace=0
+for arg in "$@"; do
+  case "$arg" in
+    --workspace) workspace=1 ;;
+    *) printf 'audit_hygiene.sh: unknown argument: %s\n' "$arg" >&2; exit 2 ;;
+  esac
+done
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -60,7 +73,7 @@ grep -q 'set_hypothesis_home_dir(HYPOTHESIS_DIR)' tests/conftest.py \
   || err "tests/conftest.py does not route hypothesis storage"
 
 # --- 3. Stray caches at the project root --------------------------------------
-for stray in .pytest_cache .mypy_cache .ruff_cache .hypothesis .coverage htmlcov coverage.xml; do
+for stray in .pytest_cache .mypy_cache .ruff_cache .hypothesis .coverage htmlcov coverage.xml mutants; do
   [[ -e "$stray" ]] && err "stray cache at project root: $stray"
 done
 ok "no stray root-level caches"
@@ -69,6 +82,15 @@ ok "no stray root-level caches"
 for path in .cache/probe .venv/probe .env; do
   git check-ignore -q --no-index "$path" && ok "ignored: $path" || err "not ignored: $path"
 done
+
+# --- 5. Pristine working tree (--workspace) -----------------------------------
+if ((workspace)); then
+  if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]]; then
+    ok "working tree is pristine"
+  else
+    err "working tree has changes outside ignored paths:"$'\n'"$dirty"
+  fi
+fi
 
 if ((fail)); then
   printf '\naudit_hygiene: FAILED\n' >&2

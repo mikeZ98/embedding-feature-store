@@ -67,7 +67,8 @@ _ERROR_CARRYING: Final = frozenset({P.FAILED, P.ROLLED_BACK, P.ABORTED})
 
 def _build_table() -> Mapping[MigrationPhase, frozenset[MigrationPhase]]:
     table: dict[MigrationPhase, frozenset[MigrationPhase]] = {}
-    for current, following in zip(_ACTIVE, LIFECYCLE[1:], strict=True):
+    # Equal lengths by construction, so strict= cannot change behaviour.
+    for current, following in zip(_ACTIVE, LIFECYCLE[1:], strict=True):  # pragma: no mutate
         edges = {following, P.FAILED}
         if current in _ROLLBACKABLE:
             edges.add(P.ROLLED_BACK)
@@ -123,12 +124,13 @@ def transition(
     step = PhaseTransition(
         sequence=len(state.history), from_phase=state.phase, to_phase=target, reason=reason
     )
-    carried = state.error if target in _ERROR_CARRYING else None
+    # Only FAILED / ROLLED_BACK / ABORTED hold an error, and every edge out of
+    # them leads to another error-carrying phase, so carrying it is always valid.
     return evolve(
         state,
         phase=target,
         history=(*state.history, step),
-        error=error if error is not None else carried,
+        error=error if error is not None else state.error,
     )
 
 

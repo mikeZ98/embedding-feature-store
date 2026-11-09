@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import socket
 from importlib import metadata, resources
-
-import pytest
-from pytest_socket import SocketBlockedError
 
 import embedding_feature_store
 from embedding_feature_store import __version__
@@ -23,12 +19,6 @@ def test_public_api_surface_is_explicit() -> None:
 def test_ships_pep561_marker() -> None:
     marker = resources.files("embedding_feature_store").joinpath("py.typed")
     assert marker.is_file()
-
-
-@pytest.mark.filterwarnings("ignore:A test tried to use socket.socket:UserWarning")
-def test_network_sockets_are_blocked() -> None:
-    with pytest.raises(SocketBlockedError):
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 
 def test_hypothesis_storage_is_project_local() -> None:

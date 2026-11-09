@@ -55,7 +55,7 @@ class TestBackoffCeiling:
         assert ceilings == pytest.approx([0.1, 0.2, 0.4, 0.8, 1.0, 1.0])
 
     def test_retry_number_is_one_based(self) -> None:
-        with pytest.raises(ValueError, match="1-based"):
+        with pytest.raises(ValueError, match=r"^retry_number is 1-based$"):
             backoff_ceiling(POLICY, 0)
 
     def test_overflow_saturates_at_cap(self) -> None:

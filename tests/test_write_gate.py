@@ -123,6 +123,7 @@ async def test_drain_timeout_reopens_gate() -> None:
     with pytest.raises(DrainTimeoutError) as exc:
         await gate.close_and_drain(timeout_s=0.01)
     assert exc.value.in_flight == 1
+    assert str(exc.value) == "1 write(s) still in flight after 0.01s"
     assert gate.is_open, "a failed freeze must not strand writers"
 
     release.set()
@@ -134,7 +135,7 @@ async def test_drain_timeout_reopens_gate() -> None:
 async def test_double_close_rejected() -> None:
     gate = WriteGate()
     await gate.close_and_drain(timeout_s=1)
-    with pytest.raises(GateStateError):
+    with pytest.raises(GateStateError, match=r"^write gate is already closed$"):
         await gate.close_and_drain(timeout_s=1)
 
 

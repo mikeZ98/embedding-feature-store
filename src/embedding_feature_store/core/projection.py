@@ -87,7 +87,8 @@ class PointProjector:
         if len(vectors) != len(records):
             msg = f"embedder returned {len(vectors)} vectors for {len(records)} records"
             raise SchemaMismatchError(msg)
+        # Lengths were checked above, so strict= cannot change behaviour.
         return tuple(
             self.build_point(record, vector)
-            for record, vector in zip(records, vectors, strict=True)
+            for record, vector in zip(records, vectors, strict=True)  # pragma: no mutate
         )

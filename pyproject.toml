@@ -120,8 +120,18 @@ directory = ".cache/coverage/html"
 output = ".cache/coverage/coverage.xml"
 
 # --------------------------------------------------------------------------
-# mutmut (3.x writes its workspace to ./mutants/; it is git-ignored)
+# mutmut — run only via scripts/mutate.sh, which executes it inside a
+# throwaway copy of the project under ./.cache/mutmut/workspace/ so that the
+# ./mutants/ tree mutmut 3.x insists on creating never lands in the checkout.
 # --------------------------------------------------------------------------
 [tool.mutmut]
-paths_to_mutate = ["src/embedding_feature_store/"]
-tests_dir = ["tests/"]
+source_paths = ["src/"]
+only_mutate = [
+    "src/embedding_feature_store/core/state_machine.py",
+    "src/embedding_feature_store/core/retry.py",
+    "src/embedding_feature_store/core/write_gate.py",
+    "src/embedding_feature_store/core/projection.py",
+]
+pytest_add_cli_args = ["--no-cov", "-q"]
+pytest_add_cli_args_test_selection = ["tests/"]
+use_git_change_detection = false

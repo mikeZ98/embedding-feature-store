@@ -58,8 +58,10 @@ class TestNormalise:
 
     @pytest.mark.parametrize("vector", [(0.0, 0.0), (math.inf, 1.0), (math.nan, 1.0)])
     def test_rejects_degenerate_norm(self, vector: tuple[float, ...]) -> None:
-        with pytest.raises(InvalidVectorError):
+        norm = math.hypot(*vector)
+        with pytest.raises(InvalidVectorError) as exc:
             l2_normalise(vector)
+        assert str(exc.value) == f"cannot normalise a vector with norm {norm}"
 
     def test_large_components_do_not_overflow(self) -> None:
         unit = l2_normalise((1e308, 1e308))

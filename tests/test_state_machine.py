@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+from collections.abc import Callable, Mapping
 
 import pytest
 from hypothesis import given
@@ -12,6 +13,7 @@ from embedding_feature_store.core.errors import IllegalTransitionError, Permanen
 from embedding_feature_store.core.state_machine import (
     LIFECYCLE,
     TRANSITIONS,
+    _build_table,
     advance,
     allowed_transitions,
     fail,
@@ -83,8 +85,19 @@ def test_lifecycle_is_the_exact_happy_path() -> None:
     )
 
 
-def test_transition_table_matches_specification() -> None:
-    assert {k: set(v) for k, v in TRANSITIONS.items()} == EXPECTED
+@pytest.mark.parametrize(
+    "table",
+    [
+        pytest.param(lambda: TRANSITIONS, id="module-table"),
+        # TRANSITIONS is built once at import; calling the builder at test time
+        # is what lets mutation testing see changes to its construction.
+        pytest.param(_build_table, id="freshly-built"),
+    ],
+)
+def test_transition_table_matches_specification(
+    table: Callable[[], Mapping[MigrationPhase, frozenset[MigrationPhase]]],
+) -> None:
+    assert {k: set(v) for k, v in table().items()} == EXPECTED
 
 
 def test_table_is_read_only() -> None:
@@ -133,8 +146,14 @@ def test_terminal_sinks(sink: MigrationPhase) -> None:
 def test_failed_is_not_terminal_and_has_no_happy_successor() -> None:
     state = reach(P.FAILED)
     assert not is_terminal(P.FAILED)
-    with pytest.raises(IllegalTransitionError, match="no happy-path successor"):
+    with pytest.raises(IllegalTransitionError) as exc:
         advance(state)
+    assert str(exc.value) == "illegal transition failed -> failed: no happy-path successor"
+
+
+def test_reason_defaults_to_empty() -> None:
+    assert transition(initial(), P.PROVISIONING).history[-1].reason == ""
+    assert advance(initial()).history[-1].reason == ""
 
 
 def test_illegal_transition_is_permanent() -> None:
@@ -143,12 +162,18 @@ def test_illegal_transition_is_permanent() -> None:
 
 class TestErrors:
     def test_entering_failed_requires_error(self) -> None:
-        with pytest.raises(IllegalTransitionError, match="requires an error"):
+        with pytest.raises(IllegalTransitionError) as exc:
             transition(initial(), P.FAILED)
+        assert str(exc.value) == (
+            "illegal transition pending -> failed: entering FAILED requires an error"
+        )
 
     def test_error_rejected_on_healthy_phase(self) -> None:
-        with pytest.raises(IllegalTransitionError, match="only failure phases"):
+        with pytest.raises(IllegalTransitionError) as exc:
             transition(initial(), P.PROVISIONING, error="boom")
+        assert str(exc.value) == (
+            "illegal transition pending -> provisioning: only failure phases carry an error"
+        )
 
     def test_fail_records_error(self) -> None:
         state = fail(advance(initial()), "disk full")
