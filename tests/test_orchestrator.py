@@ -24,7 +24,9 @@ from embedding_feature_store.schemas import (
     AliasAction,
     CreateAliasAction,
     MigrationPhase,
+    MigrationState,
     PointRecord,
+    ScrollPage,
     VectorSpec,
 )
 from embedding_feature_store.storage.faults import ALL_METHODS, FaultInjectingStore, FaultPlan
@@ -110,6 +112,18 @@ async def assert_rolled_back_to_blue(world: World, result: MigrationResult) -> N
 # ---------------------------------------------------------------------------
 
 
+class IoYieldingStore(InMemoryVectorStore):
+    """In-memory store whose reads yield to the event loop, as network I/O would."""
+
+    async def count(self, collection: str) -> int:
+        await asyncio.sleep(0)
+        return await super().count(collection)
+
+    async def scroll(self, collection: str, *, offset: int | None, limit: int) -> ScrollPage:
+        await asyncio.sleep(0)
+        return await super().scroll(collection, offset=offset, limit=limit)
+
+
 class TestHappyPath:
     @pytest.mark.asyncio
     async def test_completes_and_retires_blue(self) -> None:
@@ -147,24 +161,46 @@ class TestHappyPath:
         assert orchestrator.ledger.count == 10
 
     @pytest.mark.asyncio
-    async def test_completes_under_live_traffic_with_zero_loss(self) -> None:
-        world = await make_world(rows=300, batch_size=16)
+    async def test_completes_under_live_traffic_with_zero_loss(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        world = await make_world(rows=300, batch_size=16, store=IoYieldingStore())
+        # Paced, not zero-interval: a writer that spins on every event-loop turn
+        # produces work proportional to wall time (each embedding thread hop
+        # lets it run a burst), so the run's cost would depend on the platform
+        # rather than on this test. Paced traffic keeps the volume bounded.
         profile = TrafficProfile(
             alias=ALIAS,
             feature_dim=SOURCE_DIM,
             id_range=400,
             seed=3,
-            read_interval_s=0.0,
-            write_interval_s=0.0,
+            read_interval_s=0.0005,
+            write_interval_s=0.0005,
         )
         traffic = LiveTrafficSimulator(
             world.store, world.source, world.gate, world.metrics, profile
         )
+
+        # Deterministic held write: one extra write is started the moment the
+        # run enters VERIFYING, where the gate is closed for the freeze. The
+        # verifier's first store read yields (as real I/O does), so the probe
+        # runs while the gate is still closed and parks until it reopens.
+        probes: list[asyncio.Task[None]] = []
+        observe = world.metrics.observe_state
+
+        def observe_and_probe(state: MigrationState) -> None:
+            observe(state)
+            if state.phase is P.VERIFYING:
+                assert not world.gate.is_open, "VERIFYING runs inside the freeze"
+                probes.append(asyncio.create_task(traffic.write_once()))
+
+        monkeypatch.setattr(world.metrics, "observe_state", observe_and_probe)
+
         async with traffic:
             result = await world.orchestrator().run()
-            for _ in range(20):  # let writes held by the freeze land
-                await asyncio.sleep(0)
+            await asyncio.gather(*probes)  # the held write lands after reopen
         stats = traffic.stats
+        assert len(probes) == 1
         assert result.state.phase is P.COMPLETED
         assert stats.read_errors == 0, traffic.last_read_error
         assert stats.dropped == 0
